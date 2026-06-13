@@ -145,7 +145,7 @@ export default function App() {
           <div>
             <div className="login-logo">
               <Zap size={36} color="var(--accent-purple)" className="fire-emoji" />
-              <span>HabitRPG</span>
+              <span>Tic Track</span>
             </div>
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontWeight: 600 }}>
               Gamified Daily Routine & Expense Tracker
