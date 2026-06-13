@@ -1,5 +1,5 @@
 import express from 'express';
-import { YearGoal, MonthGoal, WeekGoal, DailyLog } from './models.js';
+import { User, YearGoal, MonthGoal, WeekGoal, DailyLog } from './models.js';
 
 const router = express.Router();
 
@@ -22,56 +22,23 @@ function getWeekNumber(dateStr) {
 // Helper to calculate points for a log
 function calculateLogPoints(log) {
   const tasks = log.tasks || [];
-  const expenses = log.expenses || [];
-  const budget = log.dailyBudget || 500;
+  const total = tasks.length;
+  if (total === 0) return 0.0;
 
-  // 1. Mandatory tasks
-  const mandatoryTasks = tasks.filter(t => t.isMandatory);
-  const totalMandatory = mandatoryTasks.length;
-  const completedMandatory = mandatoryTasks.filter(t => t.status === 'completed').length;
+  const completed = tasks.filter(t => t.status === 'completed').length;
+  const ratio = completed / total;
 
-  let taskPoints = 0;
-  if (totalMandatory > 0) {
-    if (completedMandatory === 0) {
-      taskPoints = -0.5; // Penalty for zero mandatory tasks done
-    } else {
-      taskPoints = completedMandatory / totalMandatory; // Scale from 0 to 1
-    }
-  }
-
-  // 2. Extra tasks (+0.25 each, max +0.5)
-  const extraTasks = tasks.filter(t => !t.isMandatory);
-  const completedExtra = extraTasks.filter(t => t.status === 'completed').length;
-  const extraPoints = Math.min(completedExtra * 0.25, 0.5);
-
-  // 3. Restrictions
-  const restrictionTasks = tasks.filter(t => t.category.toLowerCase().includes('restrict'));
-  const totalRestrictions = restrictionTasks.length;
-  const failedRestrictions = restrictionTasks.filter(t => t.status === 'failed').length;
-
-  let restrictionPoints = 0;
-  if (totalRestrictions > 0) {
-    if (failedRestrictions > 0) {
-      restrictionPoints = failedRestrictions * -0.5; // Deduct for each failed restriction
-    } else {
-      restrictionPoints = 0.5; // Reward for maintaining all restrictions
-    }
-  }
-
-  // 4. Expenses
-  const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-  let expensePoints = 0;
-  if (totalExpenses <= budget) {
-    expensePoints = 0.5; // Under budget reward
-  } else if (totalExpenses <= budget * 1.5) {
-    expensePoints = -0.5; // Mildly over budget
+  if (ratio === 1.0) {
+    return 2.0;
+  } else if (ratio >= 0.70) {
+    return 1.0;
+  } else if (ratio >= 0.50) {
+    return 0.0;
+  } else if (ratio >= 0.20) {
+    return -1.0;
   } else {
-    expensePoints = -1.0; // Heavily over budget
+    return -2.0;
   }
-
-  // Final Points clamped between -2.0 and +2.0
-  const finalPoints = Math.max(-2.0, Math.min(2.0, taskPoints + extraPoints + restrictionPoints + expensePoints));
-  return parseFloat(finalPoints.toFixed(2));
 }
 
 // Helper to get all 7 dates YYYY-MM-DD of a week
@@ -91,7 +58,11 @@ function getDatesOfWeek(year, weekNumber) {
   for (let i = 0; i < 7; i++) {
     const d = new Date(monTarget);
     d.setDate(monTarget.getDate() + i);
-    dates.push(d.toISOString().split('T')[0]);
+    
+    const dYear = d.getFullYear();
+    const dMonth = String(d.getMonth() + 1).padStart(2, '0');
+    const dDay = String(d.getDate()).padStart(2, '0');
+    dates.push(`${dYear}-${dMonth}-${dDay}`);
   }
   return dates;
 }
@@ -109,7 +80,7 @@ function generateCritique(log) {
 
   const totalTasks = tasks.length;
   const completedTasks = tasks.filter(t => t.status === 'completed').length;
-  const failedTasks = tasks.filter(t => t.status === 'failed').length;
+  const failedTasks = tasks.filter(t => t.status === 'failed' || t.status === 'rejected').length;
   const pendingTasks = tasks.filter(t => t.status === 'pending').length;
 
   const totalSpent = expenses.reduce((sum, e) => sum + e.amount, 0);
@@ -148,13 +119,207 @@ function generateCritique(log) {
   return { critiques, achievements };
 }
 
+// Helper to ensure all DailyLog documents exist between minDate and todayStr
+async function ensureDailyLogsExist(userId, todayStr) {
+  try {
+    const earliestLog = await DailyLog.findOne({ userId }).sort({ date: 1 });
+    if (!earliestLog) return;
+
+    const minDateStr = earliestLog.date;
+    if (minDateStr >= todayStr) return;
+
+    // Parse dates safely
+    const minParts = minDateStr.split('-');
+    let currentDate = new Date(Number(minParts[0]), Number(minParts[1]) - 1, Number(minParts[2]));
+    
+    const todayParts = todayStr.split('-');
+    const todayDate = new Date(Number(todayParts[0]), Number(todayParts[1]) - 1, Number(todayParts[2]));
+
+    // Limit backfill window to prevent infinite growth issues
+    const maxBackfillDays = 90;
+    const cutoffDate = new Date(todayDate);
+    cutoffDate.setDate(cutoffDate.getDate() - maxBackfillDays);
+    if (currentDate < cutoffDate) {
+      currentDate = cutoffDate;
+    }
+
+    // Fetch existing logs in range
+    const existingLogs = await DailyLog.find({
+      userId,
+      date: { $gte: minDateStr, $lte: todayStr }
+    });
+    const existingDatesSet = new Set(existingLogs.map(l => l.date));
+
+    // Loop through dates and create missing ones
+    while (currentDate < todayDate) {
+      const cYear = currentDate.getFullYear();
+      const cMonth = String(currentDate.getMonth() + 1).padStart(2, '0');
+      const cDay = String(currentDate.getDate()).padStart(2, '0');
+      const checkStr = `${cYear}-${cMonth}-${cDay}`;
+
+      if (!existingDatesSet.has(checkStr)) {
+        const { year, week } = getWeekNumber(checkStr);
+        const weekGoal = await WeekGoal.findOne({ userId, year, weekNumber: week });
+        
+        let defaultTasks = [];
+        let weekGoalId = null;
+
+        if (weekGoal) {
+          weekGoalId = weekGoal._id;
+          weekGoal.categories.forEach(cat => {
+            cat.subTasks.forEach(taskText => {
+              defaultTasks.push({
+                text: taskText,
+                category: cat.name,
+                isMandatory: true,
+                status: 'failed' // automatic fail for past unlogged day
+              });
+            });
+          });
+        }
+
+        const newLog = new DailyLog({
+          userId,
+          date: checkStr,
+          weekGoalId,
+          tasks: defaultTasks,
+          expenses: [],
+          dailyBudget: 500,
+          points: 0,
+          isLocked: false,
+          note: ''
+        });
+
+        newLog.points = calculateLogPoints(newLog);
+        await newLog.save();
+      }
+
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+  } catch (err) {
+    console.error('Error auto-backfilling logs:', err);
+  }
+}
+
+/* ==========================================================================
+   AUTHENTICATION MIDDLEWARE & ENDPOINT
+   ========================================================================== */
+
+async function authMiddleware(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  const token = authHeader.split(' ')[1];
+
+  if (token.startsWith('mock-')) {
+    const mockEmail = token.replace('mock-', '');
+    try {
+      let user = await User.findOne({ email: mockEmail });
+      if (!user) {
+        user = new User({
+          googleId: `mock-${mockEmail}`,
+          email: mockEmail,
+          name: mockEmail.split('@')[0].toUpperCase(),
+          picture: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80'
+        });
+        await user.save();
+      }
+      req.user = user;
+      return next();
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  try {
+    const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
+    if (!googleRes.ok) {
+      return res.status(401).json({ error: 'Invalid Google token' });
+    }
+    const tokenInfo = await googleRes.json();
+
+    if (process.env.GOOGLE_CLIENT_ID && tokenInfo.aud !== process.env.GOOGLE_CLIENT_ID) {
+      return res.status(401).json({ error: 'Audience mismatch' });
+    }
+
+    let user = await User.findOne({ email: tokenInfo.email });
+    if (!user) {
+      user = new User({
+        googleId: tokenInfo.sub,
+        email: tokenInfo.email,
+        name: tokenInfo.name || tokenInfo.email.split('@')[0],
+        picture: tokenInfo.picture || ''
+      });
+      await user.save();
+    }
+    req.user = user;
+    next();
+  } catch (err) {
+    console.error('Auth middleware error', err);
+    res.status(401).json({ error: 'Authentication failed' });
+  }
+}
+
+router.post('/auth/google', async (req, res) => {
+  const { token } = req.body;
+  if (!token) {
+    return res.status(400).json({ error: 'Token is required' });
+  }
+
+  if (token.startsWith('mock-')) {
+    const mockEmail = token.replace('mock-', '');
+    try {
+      let user = await User.findOne({ email: mockEmail });
+      if (!user) {
+        user = new User({
+          googleId: `mock-${mockEmail}`,
+          email: mockEmail,
+          name: mockEmail.split('@')[0].toUpperCase(),
+          picture: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80'
+        });
+        await user.save();
+      }
+      return res.json({ user, token });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  try {
+    const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
+    if (!googleRes.ok) {
+      return res.status(401).json({ error: 'Invalid Google token' });
+    }
+    const tokenInfo = await googleRes.json();
+
+    if (process.env.GOOGLE_CLIENT_ID && tokenInfo.aud !== process.env.GOOGLE_CLIENT_ID) {
+      return res.status(401).json({ error: 'Audience mismatch' });
+    }
+
+    let user = await User.findOne({ email: tokenInfo.email });
+    if (!user) {
+      user = new User({
+        googleId: tokenInfo.sub,
+        email: tokenInfo.email,
+        name: tokenInfo.name || tokenInfo.email.split('@')[0],
+        picture: tokenInfo.picture || ''
+      });
+      await user.save();
+    }
+    res.json({ user, token });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ==========================================================================
    YEAR GOALS ENDPOINTS
    ========================================================================= */
 
-router.get('/goals/years', async (req, res) => {
+router.get('/goals/years', authMiddleware, async (req, res) => {
   try {
-    const filter = {};
+    const filter = { userId: req.user._id };
     if (req.query.year) filter.year = Number(req.query.year);
     const goals = await YearGoal.find(filter).sort({ year: -1 });
     res.json(goals);
@@ -163,10 +328,10 @@ router.get('/goals/years', async (req, res) => {
   }
 });
 
-router.post('/goals/years', async (req, res) => {
+router.post('/goals/years', authMiddleware, async (req, res) => {
   try {
     const { year, title, description } = req.body;
-    const goal = new YearGoal({ year, title, description });
+    const goal = new YearGoal({ userId: req.user._id, year, title, description });
     await goal.save();
     res.status(201).json(goal);
   } catch (err) {
@@ -174,34 +339,33 @@ router.post('/goals/years', async (req, res) => {
   }
 });
 
-router.put('/goals/years/:id', async (req, res) => {
+router.put('/goals/years/:id', authMiddleware, async (req, res) => {
   try {
     const { title, description, status } = req.body;
-    const goal = await YearGoal.findByIdAndUpdate(
-      req.params.id,
+    const goal = await YearGoal.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
       { title, description, status },
       { new: true }
     );
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
     res.json(goal);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/goals/years/:id', async (req, res) => {
+router.delete('/goals/years/:id', authMiddleware, async (req, res) => {
   try {
-    const yearGoal = await YearGoal.findById(req.params.id);
+    const yearGoal = await YearGoal.findOne({ _id: req.params.id, userId: req.user._id });
     if (!yearGoal) return res.status(404).json({ error: 'Goal not found' });
     
     // Delete cascading
-    if (yearGoal._id) {
-      const months = await MonthGoal.find({ yearGoalId: yearGoal._id });
-      for (let m of months) {
-        await WeekGoal.deleteMany({ monthGoalId: m._id });
-      }
-      await MonthGoal.deleteMany({ yearGoalId: yearGoal._id });
+    const months = await MonthGoal.find({ userId: req.user._id, yearGoalId: yearGoal._id });
+    for (let m of months) {
+      await WeekGoal.deleteMany({ userId: req.user._id, monthGoalId: m._id });
     }
-    await YearGoal.findByIdAndDelete(req.params.id);
+    await MonthGoal.deleteMany({ userId: req.user._id, yearGoalId: yearGoal._id });
+    await YearGoal.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
 
     res.json({ message: 'Year goal deleted' });
   } catch (err) {
@@ -213,9 +377,9 @@ router.delete('/goals/years/:id', async (req, res) => {
    MONTH GOALS ENDPOINTS
    ========================================================================== */
 
-router.get('/goals/months', async (req, res) => {
+router.get('/goals/months', authMiddleware, async (req, res) => {
   try {
-    const filter = {};
+    const filter = { userId: req.user._id };
     if (req.query.yearGoalId) filter.yearGoalId = req.query.yearGoalId;
     if (req.query.year) filter.year = Number(req.query.year);
     if (req.query.month) filter.month = Number(req.query.month);
@@ -227,10 +391,10 @@ router.get('/goals/months', async (req, res) => {
   }
 });
 
-router.post('/goals/months', async (req, res) => {
+router.post('/goals/months', authMiddleware, async (req, res) => {
   try {
     const { yearGoalId, month, year, title } = req.body;
-    const goal = new MonthGoal({ yearGoalId, month, year, title });
+    const goal = new MonthGoal({ userId: req.user._id, yearGoalId, month, year, title });
     await goal.save();
     res.status(201).json(goal);
   } catch (err) {
@@ -238,24 +402,28 @@ router.post('/goals/months', async (req, res) => {
   }
 });
 
-router.put('/goals/months/:id', async (req, res) => {
+router.put('/goals/months/:id', authMiddleware, async (req, res) => {
   try {
     const { title, status } = req.body;
-    const goal = await MonthGoal.findByIdAndUpdate(
-      req.params.id,
+    const goal = await MonthGoal.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
       { title, status },
       { new: true }
     );
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
     res.json(goal);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/goals/months/:id', async (req, res) => {
+router.delete('/goals/months/:id', authMiddleware, async (req, res) => {
   try {
-    await WeekGoal.deleteMany({ monthGoalId: req.params.id });
-    await MonthGoal.findByIdAndDelete(req.params.id);
+    const monthGoal = await MonthGoal.findOne({ _id: req.params.id, userId: req.user._id });
+    if (!monthGoal) return res.status(404).json({ error: 'Goal not found' });
+
+    await WeekGoal.deleteMany({ userId: req.user._id, monthGoalId: req.params.id });
+    await MonthGoal.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
     res.json({ message: 'Month goal and weeks deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -266,9 +434,9 @@ router.delete('/goals/months/:id', async (req, res) => {
    WEEK GOALS ENDPOINTS
    ========================================================================== */
 
-router.get('/goals/weeks', async (req, res) => {
+router.get('/goals/weeks', authMiddleware, async (req, res) => {
   try {
-    const filter = {};
+    const filter = { userId: req.user._id };
     if (req.query.monthGoalId) filter.monthGoalId = req.query.monthGoalId;
     if (req.query.year) filter.year = Number(req.query.year);
     if (req.query.weekNumber) filter.weekNumber = Number(req.query.weekNumber);
@@ -280,10 +448,10 @@ router.get('/goals/weeks', async (req, res) => {
   }
 });
 
-router.post('/goals/weeks', async (req, res) => {
+router.post('/goals/weeks', authMiddleware, async (req, res) => {
   try {
     const { monthGoalId, weekNumber, year, title, categories } = req.body;
-    const goal = new WeekGoal({ monthGoalId, weekNumber, year, title, categories });
+    const goal = new WeekGoal({ userId: req.user._id, monthGoalId, weekNumber, year, title, categories });
     await goal.save();
     res.status(201).json(goal);
   } catch (err) {
@@ -291,23 +459,25 @@ router.post('/goals/weeks', async (req, res) => {
   }
 });
 
-router.put('/goals/weeks/:id', async (req, res) => {
+router.put('/goals/weeks/:id', authMiddleware, async (req, res) => {
   try {
     const { title, categories } = req.body;
-    const goal = await WeekGoal.findByIdAndUpdate(
-      req.params.id,
+    const goal = await WeekGoal.findOneAndUpdate(
+      { _id: req.params.id, userId: req.user._id },
       { title, categories },
       { new: true }
     );
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
     res.json(goal);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.delete('/goals/weeks/:id', async (req, res) => {
+router.delete('/goals/weeks/:id', authMiddleware, async (req, res) => {
   try {
-    await WeekGoal.findByIdAndDelete(req.params.id);
+    const goal = await WeekGoal.findOneAndDelete({ _id: req.params.id, userId: req.user._id });
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
     res.json({ message: 'Week goal deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -318,16 +488,16 @@ router.delete('/goals/weeks/:id', async (req, res) => {
    DAILY LOGS ENDPOINTS
    ========================================================================== */
 
-router.get('/goals/weekly-grid/:year/:weekNumber', async (req, res) => {
+router.get('/goals/weekly-grid/:year/:weekNumber', authMiddleware, async (req, res) => {
   try {
     const { year, weekNumber } = req.params;
     const dates = getDatesOfWeek(Number(year), Number(weekNumber));
 
-    // Fetch all logs for these 7 dates
-    const logs = await DailyLog.find({ date: { $in: dates } });
+    // Fetch all logs for this user for these 7 dates
+    const logs = await DailyLog.find({ userId: req.user._id, date: { $in: dates } });
     
-    // Fetch week goals for this week
-    const weekGoals = await WeekGoal.find({ year: Number(year), weekNumber: Number(weekNumber) });
+    // Fetch week goals for this user for this week
+    const weekGoals = await WeekGoal.find({ userId: req.user._id, year: Number(year), weekNumber: Number(weekNumber) });
 
     // Build grid structure
     const grid = weekGoals.map(wg => {
@@ -357,15 +527,21 @@ router.get('/goals/weekly-grid/:year/:weekNumber', async (req, res) => {
   }
 });
 
-router.get('/logs/pending-bucket', async (req, res) => {
+router.get('/logs/pending-bucket', authMiddleware, async (req, res) => {
   try {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const logs = await DailyLog.find({ date: { $lt: todayStr } }).sort({ date: 1 });
+    const todayStr = req.query.today || new Date().toISOString().split('T')[0];
+    await ensureDailyLogsExist(req.user._id, todayStr);
+    const logs = await DailyLog.find({ userId: req.user._id, date: { $lt: todayStr } }).sort({ date: 1 });
     
     const pendingTasks = [];
-    logs.forEach(log => {
+    for (let log of logs) {
+      let modified = false;
       log.tasks.forEach(task => {
-        if (task.status === 'pending' || task.status === 'failed') {
+        if (task.status === 'pending') {
+          task.status = 'failed';
+          modified = true;
+        }
+        if (task.status === 'failed') {
           pendingTasks.push({
             date: log.date,
             text: task.text,
@@ -374,7 +550,11 @@ router.get('/logs/pending-bucket', async (req, res) => {
           });
         }
       });
-    });
+      if (modified) {
+        log.points = calculateLogPoints(log);
+        await log.save();
+      }
+    }
     
     res.json(pendingTasks);
   } catch (err) {
@@ -382,14 +562,14 @@ router.get('/logs/pending-bucket', async (req, res) => {
   }
 });
 
-router.post('/logs/resolve-pending', async (req, res) => {
+router.post('/logs/resolve-pending', authMiddleware, async (req, res) => {
   try {
     const { date, text } = req.body;
     if (!date || !text) {
       return res.status(400).json({ error: 'Missing date or task text parameters' });
     }
 
-    const log = await DailyLog.findOne({ date });
+    const log = await DailyLog.findOne({ userId: req.user._id, date });
     if (!log) {
       return res.status(404).json({ error: 'Daily log not found' });
     }
@@ -409,20 +589,59 @@ router.post('/logs/resolve-pending', async (req, res) => {
   }
 });
 
-router.get('/logs/:date', async (req, res) => {
+router.post('/logs/reject-pending', authMiddleware, async (req, res) => {
+  try {
+    const { date, text } = req.body;
+    if (!date || !text) {
+      return res.status(400).json({ error: 'Missing date or task text parameters' });
+    }
+
+    const log = await DailyLog.findOne({ userId: req.user._id, date });
+    if (!log) {
+      return res.status(404).json({ error: 'Daily log not found' });
+    }
+
+    const taskIndex = log.tasks.findIndex(t => t.text === text);
+    if (taskIndex === -1) {
+      return res.status(404).json({ error: 'Task not found in daily log' });
+    }
+
+    log.tasks[taskIndex].status = 'rejected';
+    log.points = calculateLogPoints(log);
+
+    await log.save();
+    res.json({ success: true, log, critique: generateCritique(log) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/logs/:date', authMiddleware, async (req, res) => {
   try {
     const { date } = req.params;
-    let log = await DailyLog.findOne({ date });
+    const todayStr = req.query.today || new Date().toISOString().split('T')[0];
+    let log = await DailyLog.findOne({ userId: req.user._id, date });
     
     const { year, week } = getWeekNumber(date);
-    const weekGoal = await WeekGoal.findOne({ year, weekNumber: week });
+    const weekGoal = await WeekGoal.findOne({ userId: req.user._id, year, weekNumber: week });
 
     if (log) {
+      let logModified = false;
+      
+      // Auto fail pending tasks for past days
+      if (date < todayStr) {
+        log.tasks.forEach(t => {
+          if (t.status === 'pending') {
+            t.status = 'failed';
+            logModified = true;
+          }
+        });
+      }
+
       if (weekGoal) {
-        let modified = false;
         if (!log.weekGoalId) {
           log.weekGoalId = weekGoal._id;
-          modified = true;
+          logModified = true;
         }
         weekGoal.categories.forEach(cat => {
           cat.subTasks.forEach(taskText => {
@@ -432,16 +651,17 @@ router.get('/logs/:date', async (req, res) => {
                 text: taskText,
                 category: cat.name,
                 isMandatory: true,
-                status: 'pending'
+                status: date < todayStr ? 'failed' : 'pending'
               });
-              modified = true;
+              logModified = true;
             }
           });
         });
-        if (modified) {
-          log.points = calculateLogPoints(log);
-          await log.save();
-        }
+      }
+      
+      if (logModified) {
+        log.points = calculateLogPoints(log);
+        await log.save();
       }
       return res.json({ log, critique: generateCritique(log), isNew: false });
     }
@@ -457,13 +677,14 @@ router.get('/logs/:date', async (req, res) => {
             text: taskText,
             category: cat.name,
             isMandatory: true,
-            status: 'pending'
+            status: date < todayStr ? 'failed' : 'pending'
           });
         });
       });
     }
 
     const tempLog = {
+      userId: req.user._id,
       date,
       weekGoalId,
       tasks: defaultTasks,
@@ -480,12 +701,24 @@ router.get('/logs/:date', async (req, res) => {
   }
 });
 
-router.post('/logs/:date', async (req, res) => {
+router.post('/logs/:date', authMiddleware, async (req, res) => {
   try {
     const { date } = req.params;
     const { tasks, expenses, dailyBudget, note, weekGoalId, isLocked } = req.body;
 
-    let log = await DailyLog.findOne({ date });
+    if (dailyBudget <= 0) {
+      return res.status(400).json({ error: 'Daily budget limit must be a positive number!' });
+    }
+
+    if (expenses && Array.isArray(expenses)) {
+      for (const exp of expenses) {
+        if (exp.amount <= 0) {
+          return res.status(400).json({ error: `Expense "${exp.title}" amount must be a positive number!` });
+        }
+      }
+    }
+
+    let log = await DailyLog.findOne({ userId: req.user._id, date });
 
     if (log && log.isLocked) {
       if (dailyBudget > log.dailyBudget) {
@@ -508,7 +741,7 @@ router.post('/logs/:date', async (req, res) => {
     }
 
     if (!log) {
-      log = new DailyLog({ date, weekGoalId });
+      log = new DailyLog({ userId: req.user._id, date, weekGoalId });
     }
 
     log.tasks = tasks;
@@ -531,9 +764,11 @@ router.post('/logs/:date', async (req, res) => {
    ANALYTICS & STREAKS ENDPOINTS
    ========================================================================== */
 
-router.get('/analytics/streak', async (req, res) => {
+router.get('/analytics/streak', authMiddleware, async (req, res) => {
   try {
-    const logs = await DailyLog.find().sort({ date: 1 });
+    const todayStr = req.query.today || new Date().toISOString().split('T')[0];
+    await ensureDailyLogsExist(req.user._id, todayStr);
+    const logs = await DailyLog.find({ userId: req.user._id }).sort({ date: 1 });
     if (logs.length === 0) {
       return res.json({ currentStreak: 0, longestStreak: 0 });
     }
@@ -557,7 +792,8 @@ router.get('/analytics/streak', async (req, res) => {
 
     for (let i = 0; i < sortedDates.length; i++) {
       const currentDateStr = sortedDates[i];
-      const cur = new Date(currentDateStr);
+      const curParts = currentDateStr.split('-');
+      const cur = new Date(Number(curParts[0]), Number(curParts[1]) - 1, Number(curParts[2]));
       
       if (lastDate === null) {
         tempStreak = 1;
@@ -583,20 +819,29 @@ router.get('/analytics/streak', async (req, res) => {
 
     // Determine current streak.
     // Check if the latest streak day was either today or yesterday.
-    const todayStr = new Date().toISOString().split('T')[0];
-    const yesterday = new Date();
+    const parts = todayStr.split('-');
+    const today = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    
+    const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    
+    const yYear = yesterday.getFullYear();
+    const yMonth = String(yesterday.getMonth() + 1).padStart(2, '0');
+    const yDay = String(yesterday.getDate()).padStart(2, '0');
+    const yesterdayStr = `${yYear}-${yMonth}-${yDay}`;
 
     const hasToday = activeDates.has(todayStr);
     const hasYesterday = activeDates.has(yesterdayStr);
 
     if (hasToday || hasYesterday) {
       // Find consecutive streak backwards from the latest log date that's active
-      let checkDate = hasToday ? new Date(todayStr) : new Date(yesterdayStr);
+      let checkDate = hasToday ? new Date(today) : new Date(yesterday);
       current = 0;
       while (true) {
-        const checkStr = checkDate.toISOString().split('T')[0];
+        const cYear = checkDate.getFullYear();
+        const cMonth = String(checkDate.getMonth() + 1).padStart(2, '0');
+        const cDay = String(checkDate.getDate()).padStart(2, '0');
+        const checkStr = `${cYear}-${cMonth}-${cDay}`;
         if (activeDates.has(checkStr)) {
           current++;
           checkDate.setDate(checkDate.getDate() - 1);
@@ -614,32 +859,97 @@ router.get('/analytics/streak', async (req, res) => {
   }
 });
 
-router.get('/analytics/dashboard', async (req, res) => {
+router.get('/analytics/dashboard', authMiddleware, async (req, res) => {
   try {
-    const allLogs = await DailyLog.find().sort({ date: 1 });
+    const todayStr = req.query.today || new Date().toISOString().split('T')[0];
+    await ensureDailyLogsExist(req.user._id, todayStr);
+    const allLogs = await DailyLog.find({ userId: req.user._id }).sort({ date: 1 });
     
     // 1. Day breakdown (latest log, if any)
     const latestLog = allLogs[allLogs.length - 1] || null;
 
-    // 2. Week breakdown (last 7 logs)
-    const weekLogs = allLogs.slice(-7).map(log => ({
-      date: log.date,
-      points: log.points,
-      totalExpenses: log.expenses.reduce((s, e) => s + e.amount, 0),
-      dailyBudget: log.dailyBudget || 500,
-      tasksCompleted: log.tasks.filter(t => t.status === 'completed').length,
-      tasksTotal: log.tasks.length
-    }));
+    // 2. Week breakdown (exactly 7 consecutive calendar days ending with todayStr)
+    const weekLogs = [];
+    const todayParts = todayStr.split('-');
+    const weekStartDate = new Date(Number(todayParts[0]), Number(todayParts[1]) - 1, Number(todayParts[2]));
+    weekStartDate.setDate(weekStartDate.getDate() - 6); // start 6 days ago
 
-    // 3. Month breakdown (last 30 logs for contribution grid)
-    const monthLogs = allLogs.slice(-30).map(log => ({
-      date: log.date,
-      points: log.points,
-      totalExpenses: log.expenses.reduce((s, e) => s + e.amount, 0),
-      dailyBudget: log.dailyBudget || 500,
-      tasksCompleted: log.tasks.filter(t => t.status === 'completed').length,
-      tasksTotal: log.tasks.length
-    }));
+    for (let i = 0; i < 7; i++) {
+      const cDate = new Date(weekStartDate);
+      cDate.setDate(weekStartDate.getDate() + i);
+      const cYear = cDate.getFullYear();
+      const cMonth = String(cDate.getMonth() + 1).padStart(2, '0');
+      const cDay = String(cDate.getDate()).padStart(2, '0');
+      const dateStr = `${cYear}-${cMonth}-${cDay}`;
+
+      const foundLog = allLogs.find(l => l.date === dateStr);
+      if (foundLog) {
+        weekLogs.push({
+          date: foundLog.date,
+          points: foundLog.points,
+          totalExpenses: foundLog.expenses.reduce((s, e) => s + e.amount, 0),
+          dailyBudget: foundLog.dailyBudget || 500,
+          tasksCompleted: foundLog.tasks.filter(t => t.status === 'completed').length,
+          tasksTotal: foundLog.tasks.length
+        });
+      } else {
+        weekLogs.push({
+          date: dateStr,
+          points: 0,
+          totalExpenses: 0,
+          dailyBudget: 500,
+          tasksCompleted: 0,
+          tasksTotal: 0
+        });
+      }
+    }
+
+    // 3. Month breakdown (consecutive calendar days starting from the user's earliest log to todayStr)
+    const monthLogs = [];
+    let startDateStr = todayStr;
+    const earliestLog = allLogs[0]; // allLogs is sorted by date ascending
+    if (earliestLog) {
+      startDateStr = earliestLog.date;
+    }
+
+    if (startDateStr <= todayStr) {
+      const startParts = startDateStr.split('-');
+      const start = new Date(Number(startParts[0]), Number(startParts[1]) - 1, Number(startParts[2]));
+      
+      const todayDate = new Date(Number(todayParts[0]), Number(todayParts[1]) - 1, Number(todayParts[2]));
+      const diffTime = Math.abs(todayDate - start);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+
+      for (let i = 0; i < diffDays; i++) {
+        const cDate = new Date(start);
+        cDate.setDate(start.getDate() + i);
+        const cYear = cDate.getFullYear();
+        const cMonth = String(cDate.getMonth() + 1).padStart(2, '0');
+        const cDay = String(cDate.getDate()).padStart(2, '0');
+        const dateStr = `${cYear}-${cMonth}-${cDay}`;
+
+        const foundLog = allLogs.find(l => l.date === dateStr);
+        if (foundLog) {
+          monthLogs.push({
+            date: foundLog.date,
+            points: foundLog.points,
+            totalExpenses: foundLog.expenses.reduce((s, e) => s + e.amount, 0),
+            dailyBudget: foundLog.dailyBudget || 500,
+            tasksCompleted: foundLog.tasks.filter(t => t.status === 'completed').length,
+            tasksTotal: foundLog.tasks.length
+          });
+        } else {
+          monthLogs.push({
+            date: dateStr,
+            points: 0,
+            totalExpenses: 0,
+            dailyBudget: 500,
+            tasksCompleted: 0,
+            tasksTotal: 0
+          });
+        }
+      }
+    }
 
     // 4. Year breakdown (Monthly averages)
     // Group all logs by Month (YYYY-MM)
@@ -670,6 +980,28 @@ router.get('/analytics/dashboard', async (req, res) => {
       month: monthLogs,
       year: yearStats
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ==========================================================================
+   ADMIN / MIGRATION ENDPOINTS
+   ========================================================================== */
+
+router.post('/admin/recalculate-points', authMiddleware, async (req, res) => {
+  try {
+    const logs = await DailyLog.find({ userId: req.user._id });
+    let updated = 0;
+    for (const log of logs) {
+      const newPoints = calculateLogPoints(log);
+      if (log.points !== newPoints) {
+        log.points = newPoints;
+        await log.save();
+        updated++;
+      }
+    }
+    res.json({ message: `Recalculated points for ${updated} of ${logs.length} logs.` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

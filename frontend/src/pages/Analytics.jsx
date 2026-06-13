@@ -1,7 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { Award, Zap, TrendingUp, Calendar, CheckCircle, Flame, ShieldAlert, Sparkles, Lock, Unlock } from 'lucide-react';
 
-export default function Analytics({ API_BASE }) {
+export default function Analytics({ API_BASE, token, today }) {
+  const authFetch = async (url, options = {}) => {
+    const headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`
+    };
+    if (options.body && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+    return fetch(url, { ...options, headers });
+  };
+
   const [dashboardData, setDashboardData] = useState(null);
   const [streakData, setStreakData] = useState({ currentStreak: 0, longestStreak: 0 });
   const [activeTab, setActiveTab] = useState('month'); // default to 'month' streak calendar
@@ -16,12 +27,12 @@ export default function Analytics({ API_BASE }) {
   useEffect(() => {
     fetchDashboard();
     fetchStreak();
-  }, []);
+  }, [today, token]);
 
   const fetchCellDetails = async (date) => {
     try {
       setSelectedDetailLoading(true);
-      const res = await fetch(`${API_BASE}/logs/${date}`);
+      const res = await authFetch(`${API_BASE}/logs/${date}?today=${today}`);
       const data = await res.json();
       setSelectedDetail(data);
     } catch (err) {
@@ -34,7 +45,7 @@ export default function Analytics({ API_BASE }) {
   const fetchDashboard = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/analytics/dashboard`);
+      const res = await authFetch(`${API_BASE}/analytics/dashboard?today=${today}`);
       const data = await res.json();
       setDashboardData(data);
       if (data.month && data.month.length > 0) {
@@ -51,7 +62,7 @@ export default function Analytics({ API_BASE }) {
 
   const fetchStreak = async () => {
     try {
-      const res = await fetch(`${API_BASE}/analytics/streak`);
+      const res = await authFetch(`${API_BASE}/analytics/streak?today=${today}`);
       const data = await res.json();
       setStreakData(data);
     } catch (err) {
@@ -414,10 +425,10 @@ export default function Analytics({ API_BASE }) {
 
   const getDayRating = (pts) => {
     if (pts === 2.0) return "PERFECT ASCENDED DAY 🌟";
-    if (pts >= 1.0) return "VICTORIOUS DAY ⚔️";
-    if (pts >= 0) return "MAINTAINED BOUNDS 👍";
-    if (pts === -2.0) return "CRITICAL DEFEAT 💀";
-    return "LOST CONTROL ⚠️";
+    if (pts === 1.0) return "VICTORIOUS DAY ⚔️";
+    if (pts === 0.0) return "MAINTAINED BOUNDS 👍";
+    if (pts === -1.0) return "LOST CONTROL ⚠️";
+    return "CRITICAL DEFEAT 💀";
   };
 
   // 4. Year Designation
@@ -654,7 +665,7 @@ export default function Analytics({ API_BASE }) {
                     {month.map((cell, idx) => {
                       let scoreClass = 'score-0';
                       if (cell.points >= 1.5) scoreClass = 'score-pos-2';
-                      else if (cell.points >= 0.5) scoreClass = 'score-pos-1';
+                      else if (cell.points > 0) scoreClass = 'score-pos-1';
                       else if (cell.points < -1.0) scoreClass = 'score-neg-2';
                       else if (cell.points < 0) scoreClass = 'score-neg-1';
 
@@ -662,13 +673,43 @@ export default function Analytics({ API_BASE }) {
                         <div 
                           key={idx} 
                           className={`contrib-cell ${scoreClass} ${selectedCell?.date === cell.date ? 'active-success' : ''}`}
-                          data-tooltip={`${cell.date}: Score ${cell.points}`}
+                          data-tooltip={`${cell.date}: Score ${cell.points > 0 ? `+${cell.points}` : cell.points} | Spent: ${cell.totalExpenses}/${cell.dailyBudget} INR`}
                           onClick={() => {
                             setSelectedCell(cell);
                             fetchCellDetails(cell.date);
                           }}
+                          style={{ position: 'relative' }}
                         >
-                          {cell.date.substring(8)}
+                          {(() => {
+                            const parts = cell.date.split('-');
+                            const day = parseInt(parts[2], 10);
+                            const monthIndex = parseInt(parts[1], 10) - 1;
+                            const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                            
+                            if (day === 1 || idx === 0) {
+                              return (
+                                <span style={{ fontSize: '0.62rem', whiteSpace: 'nowrap' }}>
+                                  {months[monthIndex]} {day}
+                                </span>
+                              );
+                            }
+                            return day;
+                          })()}
+                          {cell.totalExpenses > cell.dailyBudget && (
+                            <span 
+                              style={{ 
+                                position: 'absolute', 
+                                top: '2px', 
+                                right: '2px', 
+                                width: '4px', 
+                                height: '4px', 
+                                borderRadius: '50%', 
+                                background: 'var(--accent-red)',
+                                boxShadow: '0 0 4px var(--accent-red)'
+                              }} 
+                              title="Budget Exceeded!"
+                            />
+                          )}
                         </div>
                       );
                     })}
@@ -768,7 +809,7 @@ export default function Analytics({ API_BASE }) {
                                 </span>
                                 <span style={{ 
                                   fontWeight: 700,
-                                  color: task.status === 'completed' ? 'var(--accent-green)' : task.status === 'failed' ? 'var(--accent-red)' : 'var(--accent-orange)'
+                                  color: task.status === 'completed' ? 'var(--accent-green)' : (task.status === 'failed' || task.status === 'rejected') ? 'var(--accent-red)' : 'var(--accent-orange)'
                                 }}>
                                   {task.status.toUpperCase()}
                                 </span>

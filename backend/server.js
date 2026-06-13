@@ -23,6 +23,8 @@ app.get('/status', (req, res) => {
 // Database Connection
 const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/routine-tracker';
 
+import { User, YearGoal, MonthGoal, WeekGoal, DailyLog } from './models.js';
+
 console.log('Connecting to MongoDB...');
 mongoose.connect(mongoURI)
   .then(async () => {
@@ -38,6 +40,39 @@ mongoose.connect(mongoURI)
     try {
       await mongoose.connection.db.collection('weekgoals').dropIndex('monthGoalId_1_weekNumber_1');
     } catch (e) {}
+    try {
+      await mongoose.connection.db.collection('dailylogs').dropIndex('date_1');
+    } catch (e) {}
+
+    // Database migration: Ensure all existing documents have a userId assigned
+    try {
+      const defaultUser = await User.findOne({ email: 'prashant@example.com' });
+      let userId;
+      if (!defaultUser) {
+        const newUser = new User({
+          googleId: 'mock-default',
+          email: 'prashant@example.com',
+          name: 'PRASHANT CHAUHAN',
+          picture: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80'
+        });
+        await newUser.save();
+        userId = newUser._id;
+        console.log('Created default fallback user:', newUser.email);
+      } else {
+        userId = defaultUser._id;
+      }
+
+      const yUpdate = await YearGoal.updateMany({ userId: { $exists: false } }, { $set: { userId } });
+      const mUpdate = await MonthGoal.updateMany({ userId: { $exists: false } }, { $set: { userId } });
+      const wUpdate = await WeekGoal.updateMany({ userId: { $exists: false } }, { $set: { userId } });
+      const dUpdate = await DailyLog.updateMany({ userId: { $exists: false } }, { $set: { userId } });
+
+      if (yUpdate.modifiedCount > 0 || mUpdate.modifiedCount > 0 || wUpdate.modifiedCount > 0 || dUpdate.modifiedCount > 0) {
+        console.log(`[MIGRATION] Migration complete: updated ${yUpdate.modifiedCount} year goals, ${mUpdate.modifiedCount} month goals, ${wUpdate.modifiedCount} week goals, ${dUpdate.modifiedCount} daily logs.`);
+      }
+    } catch (migErr) {
+      console.error('[MIGRATION ERROR] Failed to run database migration:', migErr);
+    }
 
     app.listen(PORT, () => {
       console.log(`[SUCCESS] Server running on port ${PORT}`);

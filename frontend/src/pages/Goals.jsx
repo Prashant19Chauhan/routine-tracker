@@ -1,7 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Calendar, Target, CheckCircle, ChevronDown, Check, X } from 'lucide-react';
 
-export default function Goals({ API_BASE }) {
+export default function Goals({ API_BASE, token }) {
+  const authFetch = async (url, options = {}) => {
+    const headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`
+    };
+    if (options.body && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+    return fetch(url, { ...options, headers });
+  };
+
   const currentYear = new Date().getFullYear();
   const currentMonthIdx = new Date().getMonth();
   
@@ -64,7 +75,7 @@ export default function Goals({ API_BASE }) {
 
   const fetchWeeklyGrid = async (weekObj) => {
     try {
-      const res = await fetch(`${API_BASE}/goals/weekly-grid/${weekObj.year}/${weekObj.weekNumber}`);
+      const res = await authFetch(`${API_BASE}/goals/weekly-grid/${weekObj.year}/${weekObj.weekNumber}`);
       const data = await res.json();
       setWeeklyGrid(data);
     } catch (err) {
@@ -92,17 +103,17 @@ export default function Goals({ API_BASE }) {
   const fetchGoals = async () => {
     try {
       // 1. Fetch Year Goals for current year
-      const yRes = await fetch(`${API_BASE}/goals/years?year=${currentYear}`);
+      const yRes = await authFetch(`${API_BASE}/goals/years?year=${currentYear}`);
       const yData = await yRes.json();
       setYearsList(yData);
 
       // 2. Fetch Month Goals for current month
-      const mRes = await fetch(`${API_BASE}/goals/months?year=${currentYear}&month=${currentMonthIdx}`);
+      const mRes = await authFetch(`${API_BASE}/goals/months?year=${currentYear}&month=${currentMonthIdx}`);
       const mData = await mRes.json();
       setMonthsList(mData);
 
       // 3. Fetch Week Goals for current week
-      const wRes = await fetch(`${API_BASE}/goals/weeks?year=${currentYear}&weekNumber=${currentWeekNumber}`);
+      const wRes = await authFetch(`${API_BASE}/goals/weeks?year=${currentYear}&weekNumber=${currentWeekNumber}`);
       const wData = await wRes.json();
       setWeeksList(wData);
       
@@ -121,9 +132,8 @@ export default function Goals({ API_BASE }) {
     e.preventDefault();
     if (!yearGoalTitle.trim()) return;
     try {
-      const res = await fetch(`${API_BASE}/goals/years`, {
+      const res = await authFetch(`${API_BASE}/goals/years`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ year: currentYear, title: yearGoalTitle.trim(), description: 'Active Year Goal' })
       });
       if (res.ok) {
@@ -138,9 +148,8 @@ export default function Goals({ API_BASE }) {
   const handleToggleYearGoal = async (goal) => {
     const nextStatus = goal.status === 'completed' ? 'pending' : 'completed';
     try {
-      await fetch(`${API_BASE}/goals/years/${goal._id}`, {
+      await authFetch(`${API_BASE}/goals/years/${goal._id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...goal, status: nextStatus })
       });
       fetchGoals();
@@ -152,7 +161,7 @@ export default function Goals({ API_BASE }) {
   const handleDeleteYearGoal = async (id) => {
     if (!confirm('Are you sure you want to delete this year goal?')) return;
     try {
-      await fetch(`${API_BASE}/goals/years/${id}`, { method: 'DELETE' });
+      await authFetch(`${API_BASE}/goals/years/${id}`, { method: 'DELETE' });
       fetchGoals();
     } catch (err) {
       console.error(err);
@@ -164,9 +173,8 @@ export default function Goals({ API_BASE }) {
     e.preventDefault();
     if (!monthGoalTitle.trim()) return;
     try {
-      const res = await fetch(`${API_BASE}/goals/months`, {
+      const res = await authFetch(`${API_BASE}/goals/months`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ year: currentYear, month: currentMonthIdx, title: monthGoalTitle.trim() })
       });
       if (res.ok) {
@@ -181,9 +189,8 @@ export default function Goals({ API_BASE }) {
   const handleToggleMonthGoal = async (goal) => {
     const nextStatus = goal.status === 'completed' ? 'pending' : 'completed';
     try {
-      await fetch(`${API_BASE}/goals/months/${goal._id}`, {
+      await authFetch(`${API_BASE}/goals/months/${goal._id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...goal, status: nextStatus })
       });
       fetchGoals();
@@ -195,7 +202,7 @@ export default function Goals({ API_BASE }) {
   const handleDeleteMonthGoal = async (id) => {
     if (!confirm('Are you sure you want to delete this month goal?')) return;
     try {
-      await fetch(`${API_BASE}/goals/months/${id}`, { method: 'DELETE' });
+      await authFetch(`${API_BASE}/goals/months/${id}`, { method: 'DELETE' });
       fetchGoals();
     } catch (err) {
       console.error(err);
@@ -207,9 +214,8 @@ export default function Goals({ API_BASE }) {
     e.preventDefault();
     if (!weekGoalTitle.trim()) return;
     try {
-      const res = await fetch(`${API_BASE}/goals/weeks`, {
+      const res = await authFetch(`${API_BASE}/goals/weeks`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           year: currentYear,
           weekNumber: currentWeekNumber,
@@ -234,7 +240,7 @@ export default function Goals({ API_BASE }) {
   const handleDeleteWeekGoal = async (id) => {
     if (!confirm('Are you sure you want to delete this week routine?')) return;
     try {
-      await fetch(`${API_BASE}/goals/weeks/${id}`, { method: 'DELETE' });
+      await authFetch(`${API_BASE}/goals/weeks/${id}`, { method: 'DELETE' });
       fetchGoals();
     } catch (err) {
       console.error(err);
@@ -282,9 +288,8 @@ export default function Goals({ API_BASE }) {
 
   const updateWeek = async (updatedCategories) => {
     try {
-      const res = await fetch(`${API_BASE}/goals/weeks/${selectedWeek._id}`, {
+      const res = await authFetch(`${API_BASE}/goals/weeks/${selectedWeek._id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...selectedWeek, categories: updatedCategories })
       });
       const data = await res.json();

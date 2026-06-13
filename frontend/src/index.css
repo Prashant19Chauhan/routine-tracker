@@ -790,7 +790,7 @@ body {
 
   /* Compact Navigation header layout on mobile (row grid layout) */
   .nav-header {
-    padding: 0.5rem 1rem !important;
+    padding: 0.5rem 1rem 0.25rem !important;
   }
 
   .nav-header > div {
@@ -800,43 +800,75 @@ body {
     justify-content: space-between !important;
     align-items: center !important;
     gap: 0.5rem !important;
+    padding: 0 !important;
   }
 
   .nav-logo {
     order: 1 !important;
-    font-size: 1.2rem !important;
+    font-size: 1.25rem !important;
+    margin: 0 !important;
+  }
+
+  .header-user-section {
+    order: 2 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 0.5rem !important;
+    margin: 0 !important;
   }
 
   .streak-badge {
-    order: 2 !important;
     width: auto !important;
     justify-content: center !important;
-    font-size: 0.75rem !important;
-    padding: 0.3rem 0.65rem !important;
+    font-size: 0.7rem !important;
+    padding: 0.25rem 0.5rem !important;
+    margin: 0 !important;
   }
 
   .nav-links {
     order: 3 !important;
     width: 100% !important;
-    justify-content: space-around !important;
+    justify-content: space-between !important;
     gap: 0.25rem !important;
-    margin-top: 0.25rem !important;
+    margin-top: 0.5rem !important;
+    margin-bottom: 0.25rem !important;
   }
 
   .nav-btn {
     flex: 1 !important;
     justify-content: center !important;
     font-size: 0.75rem !important;
-    padding: 0.35rem 0.5rem !important;
+    padding: 0.45rem 0.5rem !important;
     display: inline-flex !important;
     align-items: center !important;
     gap: 0.25rem !important;
+  }
+
+  /* Compact content top padding adjustment to reduce gap below tabs */
+  main.app-container {
+    padding-top: 0.75rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
   }
 
   /* Main Grid collapses */
   .grid-2 {
     grid-template-columns: 1fr !important;
     gap: 1rem !important;
+  }
+  
+  /* Tabs Container Responsive Grid */
+  .tabs-container {
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 0.35rem !important;
+  }
+  
+  .tab-btn {
+    text-align: center !important;
+    padding: 0.5rem 0.25rem !important;
+    font-size: 0.75rem !important;
   }
   
   .grid-3 {
@@ -917,3 +949,168 @@ body {
     font-size: 2rem !important;
   }
 }
+
+/* ==========================================================================
+   AUTHENTICATION & LOGIN SCREEN STYLES
+   ========================================================================== */
+.login-screen-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background: radial-gradient(circle at 10% 20%, rgba(98, 23, 232, 0.15) 0%, transparent 40%),
+              radial-gradient(circle at 90% 80%, rgba(6, 182, 212, 0.15) 0%, transparent 40%);
+  padding: 1.5rem;
+}
+
+.login-card {
+  max-width: 480px;
+  width: 100%;
+  text-align: center;
+  padding: 3rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.login-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  font-size: 2.5rem;
+  font-weight: 900;
+  background: linear-gradient(135deg, #a78bfa 0%, #06b6d4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 0.25rem;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  margin: 1rem 0;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.login-divider:not(:empty)::before {
+  margin-right: .75em;
+}
+
+.login-divider:not(:empty)::after {
+  margin-left: .75em;
+}
+
+.demo-profile-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.demo-profile-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--accent-purple);
+  transform: translateY(-1px);
+}
+
+.demo-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid var(--border-color);
+}
+
+.demo-avatar-fallback {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(139, 92, 246, 0.2);
+  color: var(--accent-purple);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 0.85rem;
+  border: 1.5px solid rgba(139, 92, 246, 0.4);
+}
+
+.google-btn-wrapper {
+  display: flex;
+  justify-content: center;
+  margin: 0.5rem 0;
+}
+
+.history-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  color: var(--accent-gold);
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.logout-btn {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: var(--accent-red);
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.logout-btn:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--accent-red);
+}
+
+@keyframes scan-laser {
+  0% {
+    transform: translateY(0);
+    opacity: 0.2;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(260px);
+    opacity: 0.2;
+  }
+}
+
+

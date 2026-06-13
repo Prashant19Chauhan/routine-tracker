@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, Check, X, ShieldAlert, Sparkles, IndianRupee, ArrowLeft, ArrowRight, Lock, Unlock } from 'lucide-react';
+import { Plus, Trash2, Check, X, ShieldAlert, Sparkles, IndianRupee, ArrowLeft, ArrowRight, Lock, Unlock, CalendarCheck2 } from 'lucide-react';
 import DailyBoss from '../components/DailyBoss';
 import { playTaskComplete, playBossDamage, playBossDefeat, playError } from '../audio';
 
@@ -12,9 +12,14 @@ const parseTaskText = (text) => {
   return { timeSlot: null, description: text };
 };
 
-export default function DayTracker({ API_BASE, onLogSaved }) {
-  const todayStr = new Date().toISOString().split('T')[0];
-  const [date, setDate] = useState(todayStr);
+const getLocalDateString = (d = new Date()) => {
+  const offset = d.getTimezoneOffset();
+  const localDate = new Date(d.getTime() - offset * 60 * 1000);
+  return localDate.toISOString().split('T')[0];
+};
+
+export default function DayTracker({ API_BASE, token, user, today, onLogSaved }) {
+  const [date, setDate] = useState(today);
   const [log, setLog] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -39,23 +44,40 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
   // For sound trigger checks
   const prevBossHPRef = useRef(100);
   const prevExpensesExceededRef = useRef(false);
+  const prevTodayRef = useRef(today);
+
+  // Read-only state for past days
+  const isPastDay = date < today;
+
+  // Auto-date update trigger
+  useEffect(() => {
+    if (date === prevTodayRef.current) {
+      setDate(today);
+    }
+    prevTodayRef.current = today;
+  }, [today]);
 
   useEffect(() => {
     fetchLog();
     fetchPendingBucket();
-  }, [date]);
+  }, [date, token]);
 
   const fetchLog = async () => {
+    if (!token) return;
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/logs/${date}`);
+      const res = await fetch(`${API_BASE}/logs/${date}?today=${today}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       const data = await res.json();
       setLog(data.log);
       setCritique(data.critique || { critiques: [], achievements: [] });
       
       // Reset sound checks
-      prevBossHPRef.current = calculateBossHP(data.log.tasks);
-      prevExpensesExceededRef.current = calculateTotalExpenses(data.log.expenses) > data.log.dailyBudget;
+      if (data.log) {
+        prevBossHPRef.current = calculateBossHP(data.log.tasks);
+        prevExpensesExceededRef.current = calculateTotalExpenses(data.log.expenses) > data.log.dailyBudget;
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -64,8 +86,11 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
   };
 
   const fetchPendingBucket = async () => {
+    if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/logs/pending-bucket`);
+      const res = await fetch(`${API_BASE}/logs/pending-bucket?today=${today}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
       const data = await res.json();
       setPendingBucket(data);
     } catch (err) {
@@ -74,10 +99,14 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
   };
 
   const resolvePendingTask = async (dateStr, text) => {
+    if (!token) return;
     try {
       const res = await fetch(`${API_BASE}/logs/resolve-pending`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ date: dateStr, text })
       });
       const data = await res.json();
@@ -97,14 +126,41 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
     }
   };
 
+  const rejectPendingTask = async (dateStr, text) => {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_BASE}/logs/reject-pending`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ date: dateStr, text })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        fetchPendingBucket();
+        if (date === dateStr) {
+          setLog(data.log);
+          setCritique(data.critique || { critiques: [], achievements: [] });
+        }
+        if (onLogSaved) onLogSaved();
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // Doom Countdown Timer effect
   useEffect(() => {
     const updateTimer = () => {
       const now = new Date();
-      const targetDate = new Date(date);
-      const isToday = now.toISOString().split('T')[0] === date;
+      const isToday = today === date;
 
       if (!isToday) {
+        const targetDate = new Date(date);
         if (now > targetDate) {
           setTimeLeft("DAY RECKONED");
           setIsUrgent(false);
@@ -140,7 +196,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [date, log]);
+  }, [date, log, today]);
 
   // Canvas Confetti Effect
   useEffect(() => {
@@ -215,8 +271,12 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
   };
 
   const calculateBossHP = (tasks = []) => {
+    if (tasks.length === 0) return 100;
     const mandatory = tasks.filter(t => t.isMandatory);
-    if (mandatory.length === 0) return 0;
+    if (mandatory.length === 0) {
+      const completedExtra = tasks.filter(t => t.status === 'completed').length;
+      return 100 - (completedExtra / tasks.length) * 100;
+    }
     const completed = mandatory.filter(t => t.status === 'completed').length;
     return 100 - (completed / mandatory.length) * 100;
   };
@@ -230,6 +290,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
 
   // Action: Add Extra Task
   const handleAddExtraTask = () => {
+    if (isPastDay) return;
     if (!newExtraTask.trim()) return;
     const updatedTasks = [
       ...log.tasks,
@@ -241,6 +302,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
 
   // Action: Toggle Task Status
   const handleTaskStatus = (taskIndex, status) => {
+    if (isPastDay) return;
     const task = log.tasks[taskIndex];
     const isCategoryRestriction = task.category.toLowerCase().includes('restrict');
     
@@ -273,7 +335,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
 
   // Action: Delete Task
   const handleDeleteTask = (taskIndex) => {
-    if (log.isLocked) return;
+    if (isPastDay || log.isLocked) return;
     const updatedTasks = log.tasks.filter((_, idx) => idx !== taskIndex);
     updateLogTasks(updatedTasks);
   };
@@ -300,11 +362,18 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
   // Action: Add Expense
   const handleAddExpense = (e) => {
     e.preventDefault();
+    if (isPastDay) return;
     if (!expenseForm.title.trim() || !expenseForm.amount) return;
+
+    const amountVal = parseFloat(expenseForm.amount);
+    if (isNaN(amountVal) || amountVal <= 0) {
+      alert("Expense amount must be a positive number!");
+      return;
+    }
 
     const newExpense = {
       title: expenseForm.title.trim(),
-      amount: parseFloat(expenseForm.amount),
+      amount: amountVal,
       category: expenseForm.category
     };
 
@@ -328,7 +397,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
 
   // Action: Delete Expense
   const handleDeleteExpense = (idx) => {
-    if (log.isLocked) return;
+    if (isPastDay || log.isLocked) return;
     const updatedExpenses = log.expenses.filter((_, i) => i !== idx);
     const newTotal = calculateTotalExpenses(updatedExpenses);
     if (newTotal <= log.dailyBudget) {
@@ -341,7 +410,12 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
 
   // Action: Update Budget
   const handleUpdateBudget = (amount) => {
+    if (isPastDay) return;
     const val = parseFloat(amount) || 0;
+    if (val <= 0) {
+      alert("Daily budget must be a positive number!");
+      return;
+    }
     if (log.isLocked && val > log.dailyBudget) {
       alert("Commitment Lock Active: You cannot increase the daily budget!");
       return;
@@ -353,7 +427,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
 
   // Action: Activate Commitment Lock (Trapping Feature)
   const handleLockCommitment = async () => {
-    if (log.isLocked) return;
+    if (isPastDay || log.isLocked) return;
     setShowLockModal(true);
   };
 
@@ -367,15 +441,20 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
 
   // Action: Update Reflection Note
   const handleUpdateNote = (note) => {
+    if (isPastDay) return;
     const updatedLog = { ...log, note };
     setLog(updatedLog);
   };
 
   const saveLog = async (logToSave) => {
+    if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/logs/${date}`, {
+      const res = await fetch(`${API_BASE}/logs/${date}?today=${today}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify(logToSave)
       });
       const savedData = await res.json();
@@ -397,7 +476,9 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
   const shiftDate = (days) => {
     const current = new Date(date);
     current.setDate(current.getDate() + days);
-    setDate(current.toISOString().split('T')[0]);
+    const nextDateStr = getLocalDateString(current);
+    if (nextDateStr > today) return; // Block moving to future
+    setDate(nextDateStr);
   };
 
   if (loading) {
@@ -413,6 +494,14 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
       {confettiActive && <canvas ref={canvasRef} className="confetti-canvas" />}
       {showDamageFlash && <div className="screen-flash-red"></div>}
 
+      {/* Warning notice when viewing past day */}
+      {isPastDay && (
+        <div className="history-banner" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.25)', color: 'var(--accent-gold)', padding: '0.75rem 1.25rem', borderRadius: '0.5rem', fontWeight: 700, fontSize: '0.85rem' }}>
+          <ShieldAlert size={16} />
+          <span>History Mode: You are viewing a past day. Past tasks and expenses cannot be edited directly.</span>
+        </div>
+      )}
+
       {/* Date Selector Header */}
       <div className="glass-card date-selector-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem 1.5rem' }}>
         <button onClick={() => shiftDate(-1)} className="icon-btn" style={{ border: '1px solid var(--border-color)' }}>
@@ -425,7 +514,12 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
             className="input-field" 
             style={{ width: '160px', textAlign: 'center', background: 'transparent', border: 'none', fontSize: '1.25rem', fontWeight: 800, padding: 0 }}
             value={date} 
-            onChange={(e) => setDate(e.target.value)} 
+            max={today}
+            onChange={(e) => {
+              if (e.target.value <= today) {
+                setDate(e.target.value);
+              }
+            }} 
           />
           <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
             {new Date(date).toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
@@ -438,7 +532,16 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
           <span>{timeLeft}</span>
         </div>
 
-        <button onClick={() => shiftDate(1)} className="icon-btn" style={{ border: '1px solid var(--border-color)' }}>
+        <button 
+          onClick={() => shiftDate(1)} 
+          className="icon-btn" 
+          style={{ 
+            border: '1px solid var(--border-color)', 
+            opacity: date === today ? 0.3 : 1, 
+            cursor: date === today ? 'not-allowed' : 'pointer' 
+          }}
+          disabled={date === today}
+        >
           <ArrowRight size={18} />
         </button>
       </div>
@@ -446,7 +549,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
       <div className="grid-2">
         {/* GAME HUB: Boss & Live Points */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          <DailyBoss bossHP={bossHP} playerHP={playerHP} />
+          <DailyBoss bossHP={bossHP} playerHP={playerHP} tasksTotal={log.tasks.length} />
           
           <div className="glass-card points-gauge-container" style={{ position: 'relative' }}>
             {/* Lock Status overlay indicator */}
@@ -489,13 +592,13 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
             <div className="lock-button-container">
               <button 
                 onClick={handleLockCommitment} 
-                className={`commitment-lock-btn ${log.isLocked ? 'locked' : ''}`}
-                disabled={log.isLocked}
+                className={`commitment-lock-btn ${log.isLocked ? 'locked' : ''} ${isPastDay ? 'disabled' : ''}`}
+                disabled={log.isLocked || isPastDay}
               >
                 <Lock size={16} />
-                <span>{log.isLocked ? 'COMMITMENT ACTIVATED' : 'LOCK COMMITMENT FOR TODAY'}</span>
+                <span>{log.isLocked ? 'COMMITMENT ACTIVATED' : isPastDay ? 'LOCK DISABLE' : 'LOCK COMMITMENT FOR TODAY'}</span>
               </button>
-              {!log.isLocked && (
+              {!log.isLocked && !isPastDay && (
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                   Disables deleting tasks, deleting expenses, and budget extensions. Prevents cheating.
                 </p>
@@ -524,13 +627,22 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
                     <span className="pending-item-date">{item.date}</span>
                     <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>{item.text}</span>
                   </div>
-                  <button 
-                    onClick={() => resolvePendingTask(item.date, item.text)} 
-                    className="submit-btn" 
-                    style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', background: 'linear-gradient(135deg, var(--accent-orange) 0%, var(--accent-red) 100%)' }}
-                  >
-                    Resolve
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.35rem' }}>
+                    <button 
+                      onClick={() => resolvePendingTask(item.date, item.text)} 
+                      className="submit-btn" 
+                      style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', background: 'linear-gradient(135deg, var(--accent-orange) 0%, var(--accent-red) 100%)' }}
+                    >
+                      Resolve
+                    </button>
+                    <button 
+                      onClick={() => rejectPendingTask(item.date, item.text)} 
+                      className="submit-btn" 
+                      style={{ padding: '0.25rem 0.75rem', fontSize: '0.8rem', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)' }}
+                    >
+                      Reject
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -549,19 +661,25 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
           </div>
 
           {/* Quick Add Extra Task */}
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <input 
-              type="text" 
-              className="input-field" 
-              placeholder="Add custom daily extra task..." 
-              value={newExtraTask}
-              onChange={(e) => setNewExtraTask(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleAddExtraTask()}
-            />
-            <button onClick={handleAddExtraTask} className="submit-btn">
-              <Plus size={18} />
-            </button>
-          </div>
+          {!isPastDay ? (
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <input 
+                type="text" 
+                className="input-field" 
+                placeholder="Add custom daily extra task..." 
+                value={newExtraTask}
+                onChange={(e) => setNewExtraTask(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddExtraTask()}
+              />
+              <button onClick={handleAddExtraTask} className="submit-btn">
+                <Plus size={18} />
+              </button>
+            </div>
+          ) : (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontStyle: 'italic', padding: '0.25rem', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', textAlign: 'center', border: '1px dashed var(--border-color)' }}>
+              Quick task addition is disabled for past days.
+            </div>
+          )}
 
           {/* Task Render */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '120vh', overflowY: 'auto' }}>
@@ -617,32 +735,44 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
                   </div>
 
                   <div className="task-btn-group">
-                    <button 
-                      onClick={() => handleTaskStatus(idx, 'completed')}
-                      className={`icon-btn ${task.status === 'completed' ? 'active-success' : 'btn-success'}`}
-                      title="Mark Success/Kept"
-                    >
-                      <Check size={14} />
-                    </button>
-                    <button 
-                      onClick={() => handleTaskStatus(idx, 'failed')}
-                      className={`icon-btn ${task.status === 'failed' ? 'active-danger' : 'btn-danger'}`}
-                      title="Mark Failed/Broken"
-                    >
-                      <X size={14} />
-                    </button>
-                    
-                    {/* Render lock icon instead of delete if log isLocked */}
-                    {!task.isMandatory && (
-                      log.isLocked ? (
-                        <button className="icon-btn" style={{ cursor: 'not-allowed', opacity: 0.5 }} title="Locked">
-                          <Lock size={14} />
+                    {!isPastDay ? (
+                      <>
+                        <button 
+                          onClick={() => handleTaskStatus(idx, 'completed')}
+                          className={`icon-btn ${task.status === 'completed' ? 'active-success' : 'btn-success'}`}
+                          title="Mark Success/Kept"
+                        >
+                          <Check size={14} />
                         </button>
-                      ) : (
-                        <button onClick={() => handleDeleteTask(idx)} className="icon-btn btn-danger">
-                          <Trash2 size={14} />
+                        <button 
+                          onClick={() => handleTaskStatus(idx, 'failed')}
+                          className={`icon-btn ${task.status === 'failed' ? 'active-danger' : 'btn-danger'}`}
+                          title="Mark Failed/Broken"
+                        >
+                          <X size={14} />
                         </button>
-                      )
+                        
+                        {!task.isMandatory && (
+                          log.isLocked ? (
+                            <button className="icon-btn" style={{ cursor: 'not-allowed', opacity: 0.5 }} title="Locked">
+                              <Lock size={14} />
+                            </button>
+                          ) : (
+                            <button onClick={() => handleDeleteTask(idx)} className="icon-btn btn-danger">
+                              <Trash2 size={14} />
+                            </button>
+                          )
+                        )}
+                      </>
+                    ) : (
+                      // Read-only static indicators
+                      <span style={{ fontSize: '0.8rem', fontWeight: 800, padding: '0.2rem 0.5rem', borderRadius: '4px', 
+                        background: task.status === 'completed' ? 'rgba(16, 185, 129, 0.1)' : task.status === 'failed' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(255,255,255,0.03)',
+                        color: task.status === 'completed' ? 'var(--accent-green)' : task.status === 'failed' ? 'var(--accent-red)' : 'var(--text-muted)',
+                        border: '1px solid rgba(255,255,255,0.05)'
+                      }}>
+                        {task.status === 'completed' ? '✅ DONE' : task.status === 'failed' ? '❌ FAILED' : '💤 PENDING'}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -675,7 +805,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
                   style={{ background: 'transparent', padding: '0.2rem', border: 'none', borderBottom: '1px solid var(--border-color)', borderRadius: 0, fontSize: '1.1rem', fontWeight: 700 }}
                   value={log.dailyBudget} 
                   onChange={(e) => handleUpdateBudget(e.target.value)}
-                  disabled={log.isLocked}
+                  disabled={log.isLocked || isPastDay}
                 />
               </div>
             </div>
@@ -707,39 +837,45 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
           </div>
 
           {/* Add Expense Form */}
-          <form onSubmit={handleAddExpense} style={{ display: 'flex', gap: '0.5rem' }}>
-            <input 
-              type="text" 
-              className="input-field" 
-              placeholder="Item..."
-              value={expenseForm.title}
-              onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })}
-              required 
-            />
-            <input 
-              type="number" 
-              className="input-field" 
-              placeholder="Amount..."
-              style={{ maxWidth: '100px' }}
-              value={expenseForm.amount}
-              onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
-              required 
-            />
-            <select 
-              className="input-field" 
-              style={{ maxWidth: '110px' }}
-              value={expenseForm.category}
-              onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
-            >
-              <option value="food">Food</option>
-              <option value="study">Study</option>
-              <option value="entertainment">Fun</option>
-              <option value="general">Other</option>
-            </select>
-            <button type="submit" className="submit-btn">
-              <Plus size={18} />
-            </button>
-          </form>
+          {!isPastDay ? (
+            <form onSubmit={handleAddExpense} style={{ display: 'flex', gap: '0.5rem' }}>
+              <input 
+                type="text" 
+                className="input-field" 
+                placeholder="Item..."
+                value={expenseForm.title}
+                onChange={(e) => setExpenseForm({ ...expenseForm, title: e.target.value })}
+                required 
+              />
+              <input 
+                type="number" 
+                className="input-field" 
+                placeholder="Amount..."
+                style={{ maxWidth: '100px' }}
+                value={expenseForm.amount}
+                onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })}
+                required 
+              />
+              <select 
+                className="input-field" 
+                style={{ maxWidth: '110px' }}
+                value={expenseForm.category}
+                onChange={(e) => setExpenseForm({ ...expenseForm, category: e.target.value })}
+              >
+                <option value="food">Food</option>
+                <option value="study">Study</option>
+                <option value="entertainment">Fun</option>
+                <option value="general">Other</option>
+              </select>
+              <button type="submit" className="submit-btn">
+                <Plus size={18} />
+              </button>
+            </form>
+          ) : (
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontStyle: 'italic', padding: '0.25rem', background: 'rgba(255,255,255,0.02)', borderRadius: '4px', textAlign: 'center', border: '1px dashed var(--border-color)' }}>
+              Expense additions are disabled for past days.
+            </div>
+          )}
 
           {/* Expense Log List */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '180px', overflowY: 'auto' }}>
@@ -756,7 +892,7 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <span className="expense-amount">-{exp.amount}</span>
-                    {log.isLocked ? (
+                    {log.isLocked || isPastDay ? (
                       <Lock size={13} style={{ color: 'var(--accent-gold)', opacity: 0.8 }} />
                     ) : (
                       <button onClick={() => handleDeleteExpense(idx)} style={{ background: 'transparent', border: 'none', color: 'var(--accent-red)', cursor: 'pointer' }}>
@@ -787,16 +923,24 @@ export default function DayTracker({ API_BASE, onLogSaved }) {
             rows="5"
             value={log.note}
             onChange={(e) => handleUpdateNote(e.target.value)}
+            disabled={isPastDay}
           />
 
-          <button 
-            onClick={() => saveLog(log)} 
-            className="submit-btn" 
-            style={{ width: '100%', marginTop: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem' }}
-          >
-            <Sparkles size={18} />
-            <span>SAVE REFLECTION LOG</span>
-          </button>
+          {!isPastDay ? (
+            <button 
+              onClick={() => saveLog(log)} 
+              className="submit-btn" 
+              style={{ width: '100%', marginTop: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '1rem' }}
+            >
+              <Sparkles size={18} />
+              <span>SAVE REFLECTION LOG</span>
+            </button>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.85rem', background: 'rgba(255,255,255,0.02)', borderRadius: '0.5rem', color: 'var(--text-muted)', border: '1px dashed var(--border-color)', fontSize: '0.9rem', fontWeight: 700, pointerEvents: 'none' }}>
+              <CalendarCheck2 size={16} />
+              <span>LOG ARCHIVED (READ-ONLY)</span>
+            </div>
+          )}
 
           {/* Critique & Review box */}
           {(critique.critiques.length > 0 || critique.achievements.length > 0) && (
