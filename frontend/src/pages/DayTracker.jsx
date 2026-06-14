@@ -18,7 +18,7 @@ const getLocalDateString = (d = new Date()) => {
   return localDate.toISOString().split('T')[0];
 };
 
-export default function DayTracker({ API_BASE, token, user, today, onLogSaved }) {
+export default function DayTracker({ API_BASE, token, user, today, onLogSaved, authFetch }) {
   const [date, setDate] = useState(today);
   const [log, setLog] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -66,9 +66,7 @@ export default function DayTracker({ API_BASE, token, user, today, onLogSaved })
     if (!token) return;
     try {
       setLoading(true);
-      const res = await fetch(`${API_BASE}/logs/${date}?today=${today}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await authFetch(`${API_BASE}/logs/${date}?today=${today}`);
       const data = await res.json();
       setLog(data.log);
       setCritique(data.critique || { critiques: [], achievements: [] });
@@ -88,9 +86,7 @@ export default function DayTracker({ API_BASE, token, user, today, onLogSaved })
   const fetchPendingBucket = async () => {
     if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/logs/pending-bucket?today=${today}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await authFetch(`${API_BASE}/logs/pending-bucket?today=${today}`);
       const data = await res.json();
       setPendingBucket(data);
     } catch (err) {
@@ -101,12 +97,8 @@ export default function DayTracker({ API_BASE, token, user, today, onLogSaved })
   const resolvePendingTask = async (dateStr, text) => {
     if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/logs/resolve-pending`, {
+      const res = await authFetch(`${API_BASE}/logs/resolve-pending`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
         body: JSON.stringify({ date: dateStr, text })
       });
       const data = await res.json();
@@ -129,12 +121,8 @@ export default function DayTracker({ API_BASE, token, user, today, onLogSaved })
   const rejectPendingTask = async (dateStr, text) => {
     if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/logs/reject-pending`, {
+      const res = await authFetch(`${API_BASE}/logs/reject-pending`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
         body: JSON.stringify({ date: dateStr, text })
       });
       const data = await res.json();
@@ -449,12 +437,8 @@ export default function DayTracker({ API_BASE, token, user, today, onLogSaved })
   const saveLog = async (logToSave) => {
     if (!token) return;
     try {
-      const res = await fetch(`${API_BASE}/logs/${date}?today=${today}`, {
+      const res = await authFetch(`${API_BASE}/logs/${date}?today=${today}`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
         body: JSON.stringify(logToSave)
       });
       const savedData = await res.json();

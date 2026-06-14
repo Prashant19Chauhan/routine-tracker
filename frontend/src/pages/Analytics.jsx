@@ -1,17 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Award, Zap, TrendingUp, Calendar, CheckCircle, Flame, ShieldAlert, Sparkles, Lock, Unlock } from 'lucide-react';
 
-export default function Analytics({ API_BASE, token, today }) {
-  const authFetch = async (url, options = {}) => {
-    const headers = {
-      ...options.headers,
-      'Authorization': `Bearer ${token}`
-    };
-    if (options.body && !headers['Content-Type']) {
-      headers['Content-Type'] = 'application/json';
-    }
-    return fetch(url, { ...options, headers });
-  };
+export default function Analytics({ API_BASE, token, today, authFetch }) {
 
   const [dashboardData, setDashboardData] = useState(null);
   const [streakData, setStreakData] = useState({ currentStreak: 0, longestStreak: 0 });

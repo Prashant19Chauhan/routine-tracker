@@ -1,17 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Calendar, Target, CheckCircle, ChevronDown, Check, X } from 'lucide-react';
 
-export default function Goals({ API_BASE, token }) {
-  const authFetch = async (url, options = {}) => {
-    const headers = {
-      ...options.headers,
-      'Authorization': `Bearer ${token}`
-    };
-    if (options.body && !headers['Content-Type']) {
-      headers['Content-Type'] = 'application/json';
-    }
-    return fetch(url, { ...options, headers });
-  };
+export default function Goals({ API_BASE, token, authFetch }) {
 
   const currentYear = new Date().getFullYear();
   const currentMonthIdx = new Date().getMonth();

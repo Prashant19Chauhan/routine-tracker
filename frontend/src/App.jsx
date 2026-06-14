@@ -119,15 +119,37 @@ export default function App() {
     setStreak({ currentStreak: 0, longestStreak: 0 });
   };
 
+  // Global auth-aware fetch wrapper — auto-logs out on 401 (expired session)
+  const authFetch = async (url, options = {}) => {
+    const headers = {
+      ...options.headers,
+      'Authorization': `Bearer ${token}`
+    };
+    if (options.body && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+    const res = await fetch(url, { ...options, headers });
+    if (res.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      setToken(null);
+      setUser(null);
+      setStreak({ currentStreak: 0, longestStreak: 0 });
+      alert('Session expired. Please login again.');
+      throw new Error('Session expired');
+    }
+    return res;
+  };
+
   const fetchStreak = async () => {
     try {
-      const res = await fetch(`${API_BASE}/analytics/streak?today=${today}`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      const res = await authFetch(`${API_BASE}/analytics/streak?today=${today}`);
       const data = await res.json();
       setStreak(data);
     } catch (err) {
-      console.error('Streak fetch failed', err);
+      if (err.message !== 'Session expired') {
+        console.error('Streak fetch failed', err);
+      }
     }
   };
 
@@ -271,14 +293,16 @@ export default function App() {
             token={token} 
             user={user} 
             today={today} 
-            onLogSaved={fetchStreak} 
+            onLogSaved={fetchStreak}
+            authFetch={authFetch}
           />
         )}
         {activeTab === 'goals' && (
           <Goals 
             API_BASE={API_BASE} 
             token={token} 
-            user={user} 
+            user={user}
+            authFetch={authFetch}
           />
         )}
         {activeTab === 'analytics' && (
@@ -286,7 +310,8 @@ export default function App() {
             API_BASE={API_BASE} 
             token={token} 
             user={user} 
-            today={today} 
+            today={today}
+            authFetch={authFetch}
           />
         )}
       </main>

@@ -1,5 +1,9 @@
 import express from 'express';
+import jwt from 'jsonwebtoken';
 import { User, YearGoal, MonthGoal, WeekGoal, DailyLog } from './models.js';
+
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-dev-secret-change-in-production';
+const JWT_EXPIRY = process.env.JWT_EXPIRY || '7d';
 
 const router = express.Router();
 
@@ -212,53 +216,30 @@ async function authMiddleware(req, res, next) {
   }
   const token = authHeader.split(' ')[1];
 
-  if (token.startsWith('mock-')) {
-    const mockEmail = token.replace('mock-', '');
-    try {
-      let user = await User.findOne({ email: mockEmail });
-      if (!user) {
-        user = new User({
-          googleId: `mock-${mockEmail}`,
-          email: mockEmail,
-          name: mockEmail.split('@')[0].toUpperCase(),
-          picture: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&h=150&q=80'
-        });
-        await user.save();
-      }
-      req.user = user;
-      return next();
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
-  }
-
   try {
-    const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
-    if (!googleRes.ok) {
-      return res.status(401).json({ error: 'Invalid Google token' });
-    }
-    const tokenInfo = await googleRes.json();
-
-    if (process.env.GOOGLE_CLIENT_ID && tokenInfo.aud !== process.env.GOOGLE_CLIENT_ID) {
-      return res.status(401).json({ error: 'Audience mismatch' });
-    }
-
-    let user = await User.findOne({ email: tokenInfo.email });
+    // Verify our own JWT
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
     if (!user) {
-      user = new User({
-        googleId: tokenInfo.sub,
-        email: tokenInfo.email,
-        name: tokenInfo.name || tokenInfo.email.split('@')[0],
-        picture: tokenInfo.picture || ''
-      });
-      await user.save();
+      return res.status(401).json({ error: 'User not found, please login again' });
     }
     req.user = user;
     next();
   } catch (err) {
-    console.error('Auth middleware error', err);
-    res.status(401).json({ error: 'Authentication failed' });
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Session expired, please login again' });
+    }
+    return res.status(401).json({ error: 'Invalid token, please login again' });
   }
+}
+
+// Helper to sign a JWT for a user
+function signUserToken(user) {
+  return jwt.sign(
+    { userId: user._id, email: user.email },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRY }
+  );
 }
 
 router.post('/auth/google', async (req, res) => {
@@ -267,6 +248,7 @@ router.post('/auth/google', async (req, res) => {
     return res.status(400).json({ error: 'Token is required' });
   }
 
+  // Mock/demo login flow
   if (token.startsWith('mock-')) {
     const mockEmail = token.replace('mock-', '');
     try {
@@ -280,12 +262,14 @@ router.post('/auth/google', async (req, res) => {
         });
         await user.save();
       }
-      return res.json({ user, token });
+      const jwtToken = signUserToken(user);
+      return res.json({ user, token: jwtToken });
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
   }
 
+  // Real Google login flow — validate Google token ONCE, then issue our own JWT
   try {
     const googleRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${token}`);
     if (!googleRes.ok) {
@@ -307,7 +291,8 @@ router.post('/auth/google', async (req, res) => {
       });
       await user.save();
     }
-    res.json({ user, token });
+    const jwtToken = signUserToken(user);
+    res.json({ user, token: jwtToken });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
